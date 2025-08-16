@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 import asyncio
 from telegram import Bot, InputMediaPhoto
+from telegram.error import RetryAfter
 
 MONTHS_RU = [
     "Января", "Февраля", "Марта", "Апреля", "Мая", "Июня",
@@ -22,6 +23,24 @@ def parse_date_from_filename(filename):
 
 def format_date_for_message(dt):
     return f"{dt.day} {MONTHS_RU[dt.month-1]}"
+
+async def send_media_group_with_retry(bot, chat_id, media_group, max_retries=3):
+    retries = 0
+    while retries < max_retries:
+        try:
+            await bot.send_media_group(chat_id=chat_id, media=media_group)
+            return
+        except RetryAfter as e:
+            wait_time = e.retry_after
+            print(f"Flood control: ждем {wait_time} секунд...")
+            await asyncio.sleep(wait_time)
+            retries += 1
+        except TimedOut:
+            retres = max_retries
+            print(f"Ошибка TimedOut")
+        except Exception as e:
+            print(f"Ошибка при отправке: {e}")
+    print("Превышено максимальное число попыток отправки.")
 
 async def main():
     if len(sys.argv) != 4:
@@ -58,10 +77,11 @@ async def main():
         message_text = format_date_for_message(datetime(date_key.year, date_key.month, date_key.day))
 
         print(f"\nОтправка сообщения за {message_text}")
-        answer = input("Отправить? (y/n): ").strip().lower()
-        if answer != 'y':
+        answer = input("Отправить? (Y/n): ").strip().lower()
+        if answer == 'n':
             print("Пропускаем.")
             continue
+        # Если answer == '' или любой другой символ — отправляем
 
         media_group = []
         for i, (_, filename) in enumerate(groups[date_key]):
@@ -71,12 +91,9 @@ async def main():
             else:
                 media_group.append(InputMediaPhoto(open(path, "rb")))
 
-        try:
-            await bot.send_media_group(chat_id=chat_id, media=media_group)
-            print("Сообщение отправлено.")
-        except Exception as e:
-            print(f"Ошибка при отправке: {e}")
+        await send_media_group_with_retry(bot, chat_id, media_group)
+
+        print("Сообщение отправлено.")
 
 if __name__ == "__main__":
     asyncio.run(main())
-
